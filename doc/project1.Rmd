@@ -1,0 +1,375 @@
+---
+title: "Why Pop and Rock Music are more valuable than Folk Music in recent years, based on the view of Modified RFM Model"
+output:
+  html_document:
+    df_print: paged
+---
+
+### Brief View of Lyrics Dataset 
+```{r load libraries, include=FALSE ,warning=FALSE, message=FALSE}
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(tm)
+library(data.table)
+library(tidytext)
+library(tidyverse)
+library(DT)
+library(wordcloud)
+library(beeswarm)
+library(shiny)
+library(plotly)
+library(ngram)
+library(qdap)
+library(syuzhet)
+library(ggpubr)
+library(sentimentr)
+library(d3heatmap)
+```
+In this notebook, the story focuses on the exploration of different genres, therefore the classifications "Other" and "Not Available" are filtered out. Also, there are two outliers in year, only the songs published since 1968 are kept.
+
+```{r echo=FALSE}
+# load lyrics data
+load('../data/lyrics.RData') 
+lyrics<-dt_lyrics%>%filter(year>=1968,!genre=="Other",!genre=="Not Available")
+# reorder lyrics by genre
+genre_count<-lyrics%>%group_by(genre)%>%count()%>%arrange(n)
+factor<-c(genre_count$genre)
+lyrics_order<-lyrics%>%mutate(genre=factor(genre,levels=factor))%>%arrange(genre)
+```
+
+```{r echo = FALSE}
+ggplot(lyrics_order,aes(x=year,fill=genre))+
+  geom_histogram(bins=48)+
+  labs(title="Distribution of Songs in Different Genres",
+       x="Year",y="Count(n)",legend="Genre")+
+  theme_light()+
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5))
+
+```
+
+```{r echo = FALSE}
+ggplot(lyrics_order,aes(x=year,color=genre))+
+  geom_density()+
+  labs(title="Distribution of Songs in Different Genres",
+       x="Year",y="Count(n)",legend="Genre")+
+  facet_grid(~genre)+
+  theme_light()+
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5),legend.position="none",axis.text.x = element_blank())
+
+```
+
+From the plots, Rock has been the most popular genre since 1968. The music industry is more prosperous recent 15 years than before and we can see a burst during 2005-2008. However, how can we evaluate the popularity of these songs? It is unreasonable barely depending on the amount of these songs.
+
+
+### Taking a View from RFM
+
+As I mentioned before, it's not reasonable to draw a conclusion whether artists preferred to creat a song in a genre, only depending on the total amount of songs. If we treat the preference of artists producing songs in different genre as a market, then these genres will have some behavior types in the market and they can be defined as different customers. It is interesting to evaluate these customers' values by modifying a [RFM Model](https://en.wikipedia.org/wiki/RFM_(market_research)). The value of genres are related to the score, the genres with highest scores are most valuable to the market, which can be interpreted that they are popular among artists. 
+
+For the metrics of Modified RFM Model, R, F and M are redifined here. As a result, each genre is scored by its performance in recent years, their apperance since they are first recorded are also included.
+* R: the interval (year(s)) when songs reaches 5% total amount tracing back from 2016.
+* F: the amount of songs divided by the time interval between the first year it occurred and 2016.
+* M: the count of songs published in 2016.
+
+
+```{r echo=FALSE,warning=FALSE}
+# when genres firstly occured
+first_occur<-lyrics_order%>%group_by(genre)%>%summarize(year=min(year))
+# computation of Monetary(M)
+Monetary<-lyrics_order%>%filter(year==2016)%>%group_by(genre)%>%count(name="M")
+M15<-lyrics_order%>%filter(year==2015)%>%group_by(genre)%>%count(name="M15")
+total<-lyrics_order%>%group_by(genre)%>%count()
+# computation of Frequency(F)
+Frequency<-lyrics_order%>%group_by(genre)%>%summarize(age=max(year)-min(year))%>%left_join(total,by="genre")%>%mutate(`F`=n/age)%>%select(genre,`F`)
+# recency has to be redifined here, I used the year when songs in different genres reaches 5% total amount tracing back from 2016
+fiveper<-total%>%mutate(five=0.05*n)%>%arrange(genre)%>%left_join(Monetary,by="genre")%>%left_join(M15,by="genre")%>%mutate(sum=M+M15)
+Recency<-tibble(genre=factor,
+          R=c(1,0,1,1,1,1,1,2,1,2))
+# RFM table
+RFM<-Recency%>%left_join(Frequency,by="genre")%>%left_join(Monetary,by="genre")%>%
+  mutate(R=rank(-R),
+         `F`=rank(`F`),
+         M=rank(M),
+         Total=(R+`F`+M)/3)
+RS<-RFM%>%pivot_longer(c(R,`F`,M,Total),names_to = "metric",values_to = "value")
+# visulazition of RFM score, the darker the rectangle is, the higher the score is
+ggplot(RS,aes(x=genre,y=metric,fill=value))+
+  geom_raster()+ scale_fill_gradient2(low="red", high="darkgreen", mid="white")+
+  labs(title="RFM Score of Genres")+
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5),legend.position="none")
+```
+
+It can be concluded that "Pop" and "Rock" are most "valuable" among genres with score 8 and 7.17 with the scale of 10. However, the "Folk" music performs poorly out of the 10 categories. Some differences among genre features may cause this phenomenon:
+
+
+### Length of Lyrics
+
+In thia part, I explored the length of songs, which is the count of word of the whole lyrics in a song. 
+```{r include = FALSE, echo = FALSE}
+# load processed lyrics data
+load('../output/processed_lyrics.RData') 
+# load artist information
+dt_artist <- fread('../data/artists.csv') 
+lyrics_list <- c("Folk","Rock","Pop")
+time_list <- c("1970s", "1980s", "1990s", "2000s", "2010s")
+folk<-dt_lyrics%>%filter(genre=="Folk")
+rock<-dt_lyrics%>%filter(genre=="Rock")
+pop<-dt_lyrics%>%filter(genre=="Pop")
+f_corpus<- VCorpus(VectorSource(folk$stemmedwords))
+r_corpus<- VCorpus(VectorSource(rock$stemmedwords))
+p_corpus<- VCorpus(VectorSource(pop$stemmedwords))
+ffreq<- tidy(f_corpus) %>%
+  select(text) %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(word, text)%>%group_by(word)%>%count(name="freq")%>%
+  arrange(-freq)%>%head(100)%>%
+  filter(!word%in%c("youre","im","youve","ive","hes","shes","ill","youll","NA"))
+rfreq<- tidy(r_corpus) %>%
+  select(text) %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(word, text)%>%group_by(word)%>%count(name="freq")%>%
+  arrange(-freq)%>%head(100)%>%
+  filter(!word%in%c("youre","im","youve","ive","hes","shes","ill","youll","NA"))
+pfreq<- tidy(p_corpus) %>%
+  select(text) %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(word, text)%>%group_by(word)%>%count(name="freq")%>%
+  arrange(-freq)%>%head(100)%>%
+  filter(!word%in%c("youre","im","youve","ive","hes","shes","ill","youll","NA"))
+```
+
+Boxplot can show the distribution characteristics directly:
+```{r echo=FALSE,warning=FALSE}
+# create a new data set for word frequency analysis
+new<-dt_lyrics%>%filter(genre=="Folk"|genre=="Rock"|genre=="Pop")%>%select(genre,year,stemmedwords)
+count<-unlist(purrr::map(new$stemmedwords,wordcount))
+countbysong<-tibble(genre=c(new$genre),year=c(new$year),count=count)
+# draw boxplots
+div(plot_ly(type = "box") %>%
+  add_boxplot(y=countbysong$count[countbysong$genre=='Folk'],
+              marker = list(color = 'yellow',alpha=0.5),
+              line = list(color = 'yellow',alpha=0.5),
+              name='Folk') %>%
+  add_boxplot(y=countbysong$count[countbysong$genre=='Rock'],
+              marker = list(color = 'orange',alpha=0.5),
+              line = list(color = 'orange',alpha=0.5),
+              name='Rock')%>%
+  add_boxplot(y=countbysong$count[countbysong$genre=='Pop'],
+              marker = list(color = 'blue',alpha=0.5),
+              line = list(color = 'blue',alpha=0.5),
+              name='Pop'),
+  align='center')
+```
+
+The distribution of lyrics' word numbers is skewed and there are so many outliers. We can't drive conclusion that there are significant differences among 3 genres.
+
+```{r echo=FALSE}
+# filter out word length that is greater than 300, since these samples are over skewed.
+ggplot(countbysong%>%filter(count<300))+
+  geom_violin(aes(x=genre,y=count,fill=genre,color=genre),alpha=0.5)+
+  labs(y='Frequency',title="Word Frequencies")+
+  theme_light()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+When the frequecy is limited to 300, the word frequncy looks similar between Folk and Pop. Rock music reaches its $Max(width)$ in a lower word frequency. Therefore, word frequency may not be the direct cause of the diffreneces among these genres.
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+# this is an emotion computing process, as well as a sentence detection process 
+# the process of calculating emotion scores is saved as "Emotion.R"
+# it may take 6-8 hours running the code, so it is omitted in this notebook
+################################################
+####### paste the code in Emotion.R here #######
+################################################
+# save(data.df, file="../output/Emotion.RData") 
+load("../output/Emotion.RData")
+data.df<-data.df%>%filter(!is.na(word.count)) 
+```
+
+### Lyrics Density
+
+Lyrics has a unique form which is distinguished from other types of texts. The end mark is usally a carriage return, so we need to take $"\n"$, $"\r\n"$ into account for splitting text into sentences. The total amount of word can not significantly tell distinction among folk, rock and pop music, analysis is performed in this part to explore their lyrics density features, which is defined as the count of words in a sentence. Since there are some songs that has poor endmarks, therefore they can't be splitted into independent sentences, I choosed some quantiles to explore the feature.
+
+According to [Writing Tips: 25 words rule](https://jgwritingtips.wordpress.com/2010/02/17/how-long-should-a-sentence-be/), it is better to write less than 25 words in a sentence in an article. When we turn back to lyrics, it makes sence that we won't expect there are too manty words in a song than an article, therefore I choosed 0.25 and 0.1 quantiles to see the lyric density features.
+
+
+```{r echo=FALSE}
+dens<-data.df%>%group_by(song,artist,year,genre)%>%summarize(density=sum(word.count)/max(sent.id))
+dens_new<-dens%>%group_by(genre,year)%>%summarize(density=quantile(density,0.25))
+g1<-ggplot(dens_new,aes(x=year,y=density,color=genre))+
+  geom_point()+
+  labs(title="Lyrics density at 0.25 quantile")+
+  theme_light()
+dens_new1<-dens%>%group_by(genre,year)%>%summarize(density=quantile(density,0.1))
+g2<-ggplot(dens_new1,aes(x=year,y=density,color=genre))+
+  geom_point()+
+  labs(title="Lyrics density at 0.10 quantile")+
+  theme_light()
+ggarrange(g1,g2,common.legend=TRUE,legend = 'right')
+```
+
+From the plots above, it can be concluded that pop and rock music have similar word density distributions in recent years. However, there is significant fluctuation in folk music lyric density in the last few years. 
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+folkdens<-dens%>%filter(year>2000,year<=2016,genre=="Folk")%>%group_by(year)%>%count()%>%left_join(dens_new%>%filter(genre=="Folk"),by="year")%>%select(year,n,density)
+# diffn<-ifelse(diff(folkdens$n)<0,-1,1)
+# diffdens<-ifelse(diff(folkdens$density)<0,-1,1)
+# difft<-tibble(n=diffn,dens=diffdens,year=folkdens$year[-1])%>%pivot_longer(c(1,2))
+# rank<-folkdens%>%arrange(n)%>%left_join(tibble(year=folkdens$year,index_n=13:1),by="year")%>%arrange(density)
+# rank<-rank%>%left_join(tibble(year=rank$year,index_dens=13:1),by="year")
+folkdens
+```
+
+I explored a fact of folk music that when the density rises at a year, then the total amount of songs wouldn't increase. However, There isn't a specific pattern between number ranks and density ranks, indicating that folk music artists are not producing songs or invesgating songs (in the view of RFM Model) based on lyrics density.
+
+
+### Word Frequency
+In this part, the word frequency is analyzed for the commonness and characteristics of Folk, Rock and Pop. 
+
+* Word cloud of Folk Music
+```{r echo=FALSE,message=FALSE,warning=FALSE}
+# plots of folk music 
+wordcloud(ffreq$word, ffreq$freq, min.freq =3, scale=c(5, .2), random.order = FALSE, random.color = FALSE, colors= c("indianred1","indianred2","indianred3","indianred"))
+```
+
+* Word cloud of Rock Music
+```{r echo=FALSE}
+wordcloud(rfreq$word, ffreq$freq, min.freq =3, scale=c(5, .2), random.order = FALSE, random.color = FALSE, colors= c("khaki","khaki1","khaki2","khaki3"))
+```
+
+* Word cloud of Pop Music
+```{r echo=FALSE}
+wordcloud(pfreq$word, ffreq$freq, min.freq =3, scale=c(5, .2), random.order = FALSE, random.color = FALSE, colors= c("steelblue1","steelblue2","steelblue3","steelblue"))
+```
+
+```{r echo=FALSE}
+# data processing
+fx<-c()
+for(i in 1:10){fx<-c(fx,rep(ffreq[i,1],ffreq[i,2]))}
+ffactor<-rev(unlist(head(ffreq$word,10)))
+fx<-tibble(fx=unlist(fx))%>%mutate(fx=factor(fx,levels=ffactor))%>%arrange(fx)
+rx<-c()
+for(i in 1:10){rx<-c(rx,rep(rfreq[i,1],rfreq[i,2]))}
+rfactor<-rev(unlist(head(rfreq$word,10)))
+rx<-tibble(rx=unlist(rx))%>%mutate(rx=factor(rx,levels=rfactor))%>%arrange(rx)
+px<-c()
+for(i in 1:10){px<-c(px,rep(pfreq[i,1],pfreq[i,2]))}
+pfactor<-rev(unlist(head(pfreq$word,10)))
+px<-tibble(px=unlist(px))%>%mutate(px=factor(px,levels=pfactor))%>%arrange(px)
+g3<-ggplot(fx,aes(x=fx))+
+  geom_bar(fill="darkred",color="darkred",alpha=0.6,width=0.75)+
+  coord_flip()+
+  labs(x="Count",y="Folk Music")+
+  theme_light()
+g4<-ggplot(rx,aes(x=rx))+
+  geom_bar(fill="darkgreen",color="darkgreen",alpha=0.6,width=0.75)+
+  coord_flip()+
+  labs(x="Count",y="Rock Music")+
+  theme_light()
+g5<-ggplot(px,aes(x=px))+
+  geom_bar(fill="darkblue",color="darkblue",alpha=0.6,width=0.75)+
+  coord_flip()+
+  labs(x="Count",y="Pop Music")+
+  theme_light()
+ggarrange(g3,g4,g5,common.legend=TRUE,legend = 'right')
+```
+
+From the word clouds and word frequency bar plots, there are some most frequent words mutually exist, such as love, heart, life, lie, cold, etc. There are some words unique in folf music, such as christmas and chorus, relating to faith, and it has "die", also related closely to death. Rock is more about feeling, talking about the world, dream and life, also writing hand, eye, heart to do these feelings. There isn't a typical characteristic in Pop music, words are often related to love: cry and tear (maybe related to breaking up), smile (it has really a small proportion). Therefore, some of the pop songs are realted to sad love stories.
+
+
+### Sentiment Analysis
+
+To drive more general analysis to make the word frequencies make sense, some sentimental words are extracted and scored.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# senti<-unlist(purrr::map(sample$lyrics,syuzhet::get_sentiment))
+# sentibysong<-tibble(genre=c(sample$genre),year=c(sample$year),sentiment=senti)
+# save(sentibysong, file="../output/sentibysong.RData") 
+load("../output/sentibysong.RData")
+```
+
+
+```{r echo=FALSE,message=FALSE}
+ggplot(sentibysong,aes(x=year,y=sentiment,color=genre))+
+  geom_point(alpha=0.5,size=0.3)+
+  geom_smooth(se=FALSE)+
+  labs(title="Lyrics Setiment",x="Year",y="Sentiment Score")+
+  theme_light()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+From 1968 to 2016, Rock and Pop music shows balance between positive and negative setiment scores, while there is fluctuation of Folk music during 49 years, because of missing values in some years.
+
+```{r echo=FALSE, warning=FALSE}
+set<-sentibysong%>%group_by(genre,year)%>%mutate(sum=sum(sentiment))
+ggplot(set,aes(x=year,y=genre,fill=sum))+
+  geom_raster()+ scale_fill_gradient2(low="darkred", high="darkgreen", mid="white")+
+  labs(title="Anual Setiment Score (Total)")+
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5),legend.position="none")
+```
+
+There is something common between Rock and Pop music at this time, we can see strong sentiment expreesions in recent 10 years than Folk. Combining with  Modified RFM Model, there are 2 metrics directly related to time interval focusing on recent years, so sentiment might be a reason that attracts artistis. Besides, Rock tends to express negative feelings wile pop tends to express positive feelings, that is a possible reason that pop music scores higher than rock music in RFM Model.
+
+
+### Emotion Analysis
+
+The overall sentiment analysis has revealed that artists are producing setimental songs (most are positive) at these years. There are differences of the sentiment score distribution among three genres, a furthur step in what exactly the type of emotions are varied is discussed in this part.
+```{r echo=FALSE}
+heatmaps2010<-data.df%>%filter(year<2010)%>%group_by(genre)%>%summarise(
+    anger=mean(anger,na.rm=TRUE),
+    anticipation=mean(anticipation,na.rm=TRUE),
+    disgust=mean(disgust,na.rm=TRUE),
+    fear=mean(fear,na.rm=TRUE),
+    joy=mean(joy,na.rm=TRUE),
+    sadness=mean(sadness,na.rm=TRUE),
+    surprise=mean(surprise,na.rm=TRUE),
+    trust=mean(trust,na.rm=TRUE)
+  )%>%select(-genre)
+heatmaps2016<-data.df%>%filter(year>=2010)%>%group_by(genre)%>%summarise(
+    anger=mean(anger,na.rm=TRUE),
+    anticipation=mean(anticipation,na.rm=TRUE),
+    disgust=mean(disgust,na.rm=TRUE),
+    fear=mean(fear,na.rm=TRUE),
+    joy=mean(joy,na.rm=TRUE),
+    sadness=mean(sadness,na.rm=TRUE),
+    surprise=mean(surprise,na.rm=TRUE),
+    trust=mean(trust,na.rm=TRUE)
+  )%>%select(-genre)
+heatmtr<-as.matrix(rbind(heatmaps2010,heatmaps2016))
+row.names(heatmtr)<-c('Folk before 2010','Pop before 2010','Rock before 2010',
+                      'Folk after 2010','Pop after 2010','Rock after 2010')
+d3heatmap(heatmtr,color = "Blues",yaxis_font_size = 8,xaxis_font_size = 8,Colv=FALSE)
+```
+
+From the heatmap, is can be seen clearly that all three genres of songs' emotion increases from suprise to anger for most of the situation (trust has a score similar to sadness). Before 2010, folk music expresses heavy categories of emotions and mainly foucus on anger. After 2010, it shows more emotion expressions in anticipation. Comparing to folk music, rock and pop music express more in disgust, fear and joy after 2010. Besides there are also smaller proportions of sadness in rock and pop after 2010. Besides, rock music expresses more anger and anticipation than pop music. These similarities between pop and rock as well as the differences among the three genres may contribute to the score variation in Modified RFM Model. 
+
+```{r echo=FALSE}
+folkmap<-data.df%>%filter(genre=="Folk")%>%
+  group_by(year)%>%summarise(
+    anger=mean(anger,na.rm=TRUE),
+    anticipation=mean(anticipation,na.rm=TRUE),
+    disgust=mean(disgust,na.rm=TRUE),
+    fear=mean(fear,na.rm=TRUE),
+    joy=mean(joy,na.rm=TRUE),
+    sadness=mean(sadness,na.rm=TRUE),
+    surprise=mean(surprise,na.rm=TRUE),
+    trust=mean(trust,na.rm=TRUE)
+  )%>%arrange(year)
+folkmtr<-as.matrix(folkmap%>%select(-year))
+row.names(folkmtr)<-folkmap$year
+d3heatmap(folkmtr,color = "Greens",Rowv = FALSE,Colv=FALSE,xaxis_font_size = 8)
+```
+
+When we see the heat plot of folk music, the transaction before and after 2008 is more clearly to detect. Trust and joy are descending.
+
+### Conclusion
+
+From the RFM Model, if we treated different genres as products in a market, artists can show a "buying" performance characteristic in "purchasing" (actually it is producing new songs) these products. As a result, Pop and Rock are scored highest, while folk music scored lowest. To find out what might be the cause to this phenomenon, analysis is performed on word length, density, sentiment, and emotion. 
+
+* Though song word frequncy can not explain the differences, sentiment analysis reflects the preference of artists. Overall, they love songs with clearly setiment trend. Besides, positive setiment is prefered, concidering the result that pop music scores higher than rock music. 
+
+* There isn's a quantitative pattern between lyrics density and annual published song numbers, however, pop and rock music have similar patterns recent years while there is a fluctuation in folk music word density.
+
+* Both sentiment analysis and emotion analysis show that the scores attached to folk music is fluctuating by the time. Pop and rock not only show similarity in lyric density, they also show similarity in the balance of positive and negative sentiment scores.
+
+* In recent years, rock and pop music express more elements related to disgust, fear and joy after 2010, folk music artists are showing more words relevant to anticipation. Music can convey emotions to listeners, we can see from the analysis that rock can meet the needs to express anger as well as anticipation for artists; pop music can convey less angery and disgust emotions; while folk is viewed as the great genre to convey anticipation for artists. These differences show the variation of artists' creating needs, the specific emotions that pop and rock can convey is more popular among artists, which contributes to the higher score in RFM Model.
