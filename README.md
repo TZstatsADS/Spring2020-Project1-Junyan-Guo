@@ -13,6 +13,9 @@ Term: Spring 2020
 
 + Project summary: [a short summary] We may be interested in how different genres of music are performing in today’s music market. Therefore, series of analyses are performed, trying to evaluate which genres are the most popular while some of them are inactive in recent years. Artists are expressing values, contents, stories, spirit, art, and etc. through songs. Therefore, there might be some differences of the songs, leading to the evalution results, as well as what artist are trying to convey through the specific types of genres. Word length, density, sentiment, and emotion are performed to understand the differences among the highestest score genres and the lowest score genre.
 
++ Note: There is something wrong to upload files over 25Mb onto the github, therefore there is a missing doc in output folder, which can be downloaded from the link below:
+https://drive.google.com/file/d/1qNo70SU9IG_aZR-lu-fdUc2LZ0tggdyt/view?usp=sharing
+
 Following [suggestions](http://nicercode.github.io/blog/2013-04-05-projects/) by [RICH FITZJOHN](http://nicercode.github.io/about/#Team) (@richfitz). This folder is orgarnized as follows.
 
 ```
